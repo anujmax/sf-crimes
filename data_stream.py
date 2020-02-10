@@ -3,6 +3,8 @@ import json
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 import pyspark.sql.functions as psf
+from pyspark.sql.functions import udf
+import datetime
 
 # TODO Create a schema for incoming resources
 schema = StructType([
@@ -12,7 +14,7 @@ schema = StructType([
     StructField("call_date", StringType(), True),
     StructField("offense_date", StringType(), True),
     StructField("call_time", StringType(), True),
-    StructField("call_date_time", StringType(), True),
+    StructField("call_date_time", TimestampType(), True),
     StructField("disposition", StringType(), True),
     StructField("address", StringType(), True),
     StructField("city", StringType(), True),
@@ -27,7 +29,7 @@ def run_spark_job(spark):
     # TODO Create Spark Configuration
     # Create Spark configurations with max offset of 200 per trigger
     # set up correct bootstrap server and port
-    spark.sparkContext.setLogLevel("WARN")
+
     df = spark \
         .readStream \
         .format('kafka') \
@@ -39,6 +41,7 @@ def run_spark_job(spark):
         .option("stopGracefullyOnShutdown", "true") \
         .load()
 
+    spark.sparkContext.setLogLevel("WARN")
     # Show schema for the incoming resources for checks
     df.printSchema()
 
@@ -50,16 +53,21 @@ def run_spark_job(spark):
         .select(psf.from_json(psf.col('value'), schema).alias("DF")) \
         .select("DF.*")
 
+    get_hour = udf(lambda x: x.hour)
+
     # TODO select original_crime_type_name and disposition
-    distinct_table = service_table.select("original_crime_type_name", "disposition", "call_date_time")
+    distinct_table = service_table.select("original_crime_type_name", "disposition", 'call_date_time')\
+        .withWatermark("call_date_time", "60 minutes")
 
+    hour_table = distinct_table.withColumn("hour", get_hour(distinct_table.call_date_time))
     # count the number of original crime type
-    agg_df = distinct_table.select("original_crime_type_name").dropDuplicates()
-
-    # TODO Q1. Submit a screen shot of a batch ingestion of the aggregation
+    agg_df = hour_table.groupBy(hour_table.original_crime_type_name, hour_table.hour).count() \
+        .orderBy(hour_table.hour.cast("float")) \
+ \
+        # TODO Q1. Submit a screen shot of a batch ingestion of the aggregation
     # TODO write output stream
     query = agg_df.writeStream \
-        .outputMode("append") \
+        .outputMode("complete") \
         .format("console") \
         .start()
 
@@ -67,21 +75,20 @@ def run_spark_job(spark):
     query.awaitTermination()
     #
     # # TODO get the right radio code json path
-    #radio_code_json_filepath = "radio_code.json"
-    #radio_code_df = spark.read.json(radio_code_json_filepath)
+    # radio_code_json_filepath = "radio_code.json"
+    # radio_code_df = spark.read.json(radio_code_json_filepath)
     #
     # clean up your data so that the column names match on radio_code_df and agg_df
     # we will want to join on the disposition code
     #
     # # TODO rename disposition_code column to disposition
-    #radio_code_df = radio_code_df.withColumnRenamed("disposition_code", "disposition")
+    # radio_code_df = radio_code_df.withColumnRenamed("disposition_code", "disposition")
     #
     # # TODO join on disposition column
-    #join_query = agg_df.join(radio_code_df, "disposition")
+    # join_query = agg_df.join(radio_code_df, "disposition")
     #
     #
-    #join_query.awaitTermination()
-
+    # join_query.awaitTermination()
 
 
 if __name__ == "__main__":
