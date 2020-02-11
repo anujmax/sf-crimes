@@ -30,18 +30,20 @@ def run_spark_job(spark):
     # Create Spark configurations with max offset of 200 per trigger
     # set up correct bootstrap server and port
 
+
     df = spark \
         .readStream \
         .format('kafka') \
         .option('kafka.bootstrap.servers', '0.0.0.0:9092') \
         .option('subscribe', 'sf-data') \
         .option('startingOffsets', 'earliest') \
-        .option('maxRatePerPartition', 10000) \
-        .option('maxOffsetsPerTrigger', 1000) \
-        .option("stopGracefullyOnShutdown", "true") \
+        .option('maxRatePerPartition', 100) \
+        .option('maxOffsetsPerTrigger', 10) \
+        .option('stopGracefullyOnShutdown', 'true') \
         .load()
 
-    spark.sparkContext.setLogLevel("WARN")
+    spark.sparkContext.setLogLevel("ERROR")
+
     # Show schema for the incoming resources for checks
     df.printSchema()
 
@@ -61,34 +63,41 @@ def run_spark_job(spark):
 
     hour_table = distinct_table.withColumn("hour", get_hour(distinct_table.call_date_time))
     # count the number of original crime type
-    agg_df = hour_table.groupBy(hour_table.original_crime_type_name, hour_table.hour).count() \
-        .orderBy(hour_table.hour.cast("float")) \
- \
-        # TODO Q1. Submit a screen shot of a batch ingestion of the aggregation
+    agg_df = hour_table.groupBy(hour_table.original_crime_type_name, hour_table.hour).count()
+
+    # TODO Q1. Submit a screen shot of a batch ingestion of the aggregation
     # TODO write output stream
     query = agg_df.writeStream \
+        .queryName('sf-crime-data')\
+        .trigger(processingTime="1 seconds")\
         .outputMode("complete") \
         .format("console") \
         .start()
 
-    # # TODO attach a ProgressReporter
-    query.awaitTermination()
+    # TODO attach a ProgressReporter
+    #query.awaitTermination()
     #
-    # # TODO get the right radio code json path
-    # radio_code_json_filepath = "radio_code.json"
-    # radio_code_df = spark.read.json(radio_code_json_filepath)
+    # TODO get the right radio code json path
+    radio_code_json_filepath = "radio_code.json"
+    radio_code_df = spark.read.option("multiline", "true").json(radio_code_json_filepath)
     #
     # clean up your data so that the column names match on radio_code_df and agg_df
     # we will want to join on the disposition code
     #
     # # TODO rename disposition_code column to disposition
-    # radio_code_df = radio_code_df.withColumnRenamed("disposition_code", "disposition")
+    radio_code_df = radio_code_df.withColumnRenamed("disposition_code", "disposition")
+    radio_code_df.printSchema()
     #
     # # TODO join on disposition column
-    # join_query = agg_df.join(radio_code_df, "disposition")
-    #
-    #
-    # join_query.awaitTermination()
+    join_query = distinct_table \
+        .join(radio_code_df, "disposition") \
+        .writeStream \
+        .format("console") \
+        .queryName("join-sf-kafka") \
+        .trigger(processingTime="1 seconds") \
+        .start()
+
+    join_query.awaitTermination()
 
 
 if __name__ == "__main__":
@@ -99,8 +108,13 @@ if __name__ == "__main__":
         .builder \
         .master("local[*]") \
         .config("spart.ui.port", 3000) \
+        .config('spark.executor.memory', '1g') \
+        .config('spark.driver.memory', '1g') \
+        .config('spark.default.parallelism', '32') \
+        .config('spark.sql.shuffle.partitions', '32') \
         .appName("KafkaSparkStructuredStreaming") \
         .getOrCreate()
+
 
     logger.info("Spark started")
     run_spark_job(spark)
