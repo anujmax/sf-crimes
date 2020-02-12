@@ -37,12 +37,12 @@ def run_spark_job(spark):
         .option('kafka.bootstrap.servers', '0.0.0.0:9092') \
         .option('subscribe', 'sf-data') \
         .option('startingOffsets', 'earliest') \
-        .option('maxRatePerPartition', 100) \
-        .option('maxOffsetsPerTrigger', 10) \
+        .option('maxRatePerPartition', 1000) \
+        .option('maxOffsetsPerTrigger', 100) \
         .option('stopGracefullyOnShutdown', 'true') \
         .load()
 
-    spark.sparkContext.setLogLevel("ERROR")
+
 
     # Show schema for the incoming resources for checks
     df.printSchema()
@@ -69,7 +69,6 @@ def run_spark_job(spark):
     # TODO write output stream
     query = agg_df.writeStream \
         .queryName('sf-crime-data')\
-        .trigger(processingTime="1 seconds")\
         .outputMode("complete") \
         .format("console") \
         .start()
@@ -94,7 +93,6 @@ def run_spark_job(spark):
         .writeStream \
         .format("console") \
         .queryName("join-sf-kafka") \
-        .trigger(processingTime="1 seconds") \
         .start()
 
     join_query.awaitTermination()
@@ -107,11 +105,11 @@ if __name__ == "__main__":
     spark = SparkSession \
         .builder \
         .master("local[*]") \
-        .config("spart.ui.port", 3000) \
+        .config("spark.ui.port", 3000) \
         .config('spark.executor.memory', '1g') \
-        .config('spark.driver.memory', '1g') \
-        .config('spark.default.parallelism', '32') \
-        .config('spark.sql.shuffle.partitions', '32') \
+        .config('spark.driver.memory', '4g') \
+        .config('spark.default.parallelism', '8') \
+        .config('spark.sql.shuffle.partitions', '8') \
         .appName("KafkaSparkStructuredStreaming") \
         .getOrCreate()
 
